@@ -17,6 +17,7 @@ import (
 	"website-of-methodological-materials/internal/repository/postgres"
 	"website-of-methodological-materials/internal/server"
 	"website-of-methodological-materials/internal/service"
+	"website-of-methodological-materials/internal/validator"
 )
 
 func main() {
@@ -41,9 +42,13 @@ func main() {
 	healthService := service.NewHealthService(healthRepo)
 	healthHandler := handlers.NewHealthHandler(healthService)
 
+	manualRepo := postgres.NewManualRepository(pool)
+	manualService := service.NewManualService(manualRepo)
+	manualHandler := handlers.NewManualHandler(manualService, validator.New())
+
 	httpServer := &http.Server{
 		Addr:    cfg.ServerAddr,
-		Handler: server.New(healthHandler),
+		Handler: server.New(healthHandler, manualHandler),
 	}
 
 	go func() {

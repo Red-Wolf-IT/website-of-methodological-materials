@@ -23,3 +23,11 @@ type ManualCreate struct {
 	Content  string
 	FilePath *string
 }
+
+// CreateManualRequest — тело POST /manuals
+type CreateManualRequest struct {
+	Title    string  `json:"title" validate:"required,max=255"`
+	Author   string  `json:"author" validate:"required,max=255"`
+	Content  string  `json:"content" validate:"required"`
+	FilePath *string `json:"file_path,omitempty" validate:"omitempty,max=512"`
+}

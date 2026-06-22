@@ -123,3 +123,63 @@ curl http://localhost:8080/health
 ```json
 {"status":"error","database":"unavailable"}
 ```
+
+## API: Manuals
+
+Единый формат ответов:
+
+```json
+{"data": { ... }}
+```
+
+Ошибки:
+
+```json
+{"error": {"message": "..."}}
+```
+
+Ошибка валидации (`400`):
+
+```json
+{
+  "error": {
+    "message": "validation failed",
+    "fields": [
+      {"field": "title", "message": "is required"},
+      {"field": "author", "message": "is required"}
+    ]
+  }
+}
+```
+
+### POST /manuals
+
+```bash
+curl -X POST http://localhost:8080/manuals \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Название","author":"Автор","content":"Текст методички"}'
+```
+
+Ответ `201`:
+
+```json
+{
+  "data": {
+    "id": "...",
+    "title": "Название",
+    "author": "Автор",
+    "content": "Текст методички",
+    "views_count": 0,
+    "created_at": "..."
+  }
+}
+```
+
+### GET /manuals/{id}
+
+```bash
+curl http://localhost:8080/manuals/{id}
+```
+
+Ответ `200` — тот же формат с обёрткой `data`.  
+`404` — `{"error":{"message":"manual not found"}}`
