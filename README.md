@@ -1,32 +1,148 @@
 # Website of Methodological Materials
 
-Backend API на Go с архитектурой **Handlers → Services → Repositories**.
+Backend API на Go для каталога методических материалов.
+
+**Архитектура:** Handlers → Services → Repositories → PostgreSQL  
+**Асинхронность:** worker для счётчика просмотров через канал `viewsChan`
 
 ## Стек
 
-- Go
-- [chi](https://github.com/go-chi/chi) — HTTP-роутер
-- PostgreSQL — [pgx](https://github.com/jackc/pgx)
+| Компонент | Технология |
+|---|---|
+| Язык | Go 1.25+ |
+| HTTP-роутер | [chi](https://github.com/go-chi/chi) |
+| БД | PostgreSQL + [pgx](https://github.com/jackc/pgx) |
+| Валидация | [go-playground/validator](https://github.com/go-playground/validator) |
+| Конфиг | env + [godotenv](https://github.com/joho/godotenv) |
 
-## Структура
+## Структура проекта
 
 ```
-cmd/app/              — точка входа
+cmd/app/                    — точка входа, graceful shutdown
 internal/
-  config/             — конфигурация из env
-  server/             — chi-роутер
-  handlers/           — HTTP-контроллеры
-  service/            — бизнес-логика
-  repository/postgres/  — работа с БД
-  models/             — DTO/Entity
-  db/                 — подключение к PostgreSQL
-storage/migrations/   — SQL-миграции
-storage/seeds/        — тестовые данные (ручной запуск)
+  config/                   — переменные окружения
+  db/                       — пул соединений PostgreSQL
+  server/                   — chi-роутер и маршруты
+  handlers/                 — HTTP-контроллеры
+  service/                  — бизнес-логика
+  repository/postgres/      — SQL-запросы
+  models/                   — сущности и DTO
+  middleware/               — логирование, recover, admin-auth
+  validator/                — обёртка над validator
+  worker/                   — асинхронный счётчик просмотров
+  storage/                  — сохранение файлов на диск
+storage/
+  migrations/               — SQL-миграции
+  seeds/                    — тестовые данные
+  uploads/                  — загруженные вложения
+scripts/
+  smoke_test.ps1            — быстрая проверка API
+web/                        — Vue 3 фронтенд (каталог для пользователей)
 ```
+
+## Быстрый старт
+
+### 1. PostgreSQL
+
+Создайте базу данных:
+
+```bash
+psql -U postgres -c "CREATE DATABASE mrepo;"
+```
+
+Примените миграции по порядку:
+
+```bash
+psql -U postgres -d mrepo -f storage/migrations/001_create_manuals.sql
+psql -U postgres -d mrepo -f storage/migrations/002_create_tags.sql
+psql -U postgres -d mrepo -f storage/migrations/003_create_manual_tags.sql
+```
+
+Загрузите тестовые данные:
+
+```bash
+psql -U postgres -d mrepo -f storage/seeds/001_sample_data.sql
+```
+
+### 2. Конфигурация
+
+```bash
+cp .env.example .env
+```
+
+Заполните `.env`:
+
+| Переменная | Описание | Пример |
+|---|---|---|
+| `SERVER_ADDR` | Адрес HTTP-сервера | `:8080` |
+| `DB_HOST` | Хост PostgreSQL | `localhost` |
+| `DB_PORT` | Порт PostgreSQL | `5432` |
+| `DB_USER` | Пользователь БД | `postgres` |
+| `DB_PASSWORD` | Пароль БД | `pass` |
+| `DB_NAME` | Имя базы | `mrepo` |
+| `DB_SSLMODE` | SSL-режим pgx | `disable` |
+| `ADMIN_TOKEN` | Токен для админ-эндпоинтов | `dev-admin-secret` |
+| `STORAGE_DIR` | Папка для вложений | `storage/uploads` |
+
+### 3. Запуск
+
+```bash
+go run ./cmd/app
+```
+
+Проверка:
+
+```bash
+curl http://localhost:8080/health
+# {"status":"ok","database":"ok"}
+```
+
+Быстрый smoke-тест всех основных сценариев:
+
+```powershell
+powershell -File scripts/smoke_test.ps1
+```
+
+### 4. Веб-интерфейс (для пользователей)
+
+В папке `web/` — Vue 3 + Vite + Tailwind. Каталог, поиск, просмотр материалов, добавление новых.
+
+**Терминал 1 — backend:**
+
+```bash
+go run ./cmd/app
+```
+
+**Терминал 2 — frontend:**
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Откройте в браузере: **http://localhost:5173**
+
+Запросы проксируются на API через `/api` → `localhost:8080`.
+
+**Возможности интерфейса:**
+
+| Страница | URL | Что делает |
+|---|---|---|
+| Каталог | `/` | Список, поиск, фильтр по тегу, сортировка, пагинация |
+| Материал | `/manuals/{id}` | Полный текст, теги, скачивание вложения |
+| Добавить | `/create` | Форма создания + выбор/создание тегов |
+
+Сборка для продакшена:
+
+```bash
+cd web && npm run build
+# статика в web/dist/
+```
+
+---
 
 ## Схема БД
-
-Три таблицы: `manuals`, `tags`, `manual_tags`.
 
 ```
 manuals (1) ──< manual_tags >── (1) tags
@@ -34,125 +150,95 @@ manuals (1) ──< manual_tags >── (1) tags
 
 | Таблица | Описание |
 |---|---|
-| `manuals` | Методические материалы (title, author, content, file_path, views_count) |
-| `tags` | Справочник тегов (уникальное имя) |
-| `manual_tags` | Связь M:N между материалами и тегами |
+| `manuals` | Материалы: title, author, content, file_path, views_count |
+| `tags` | Справочник тегов (уникальное `name`) |
+| `manual_tags` | Связь M:N, FK с `ON DELETE CASCADE` |
 
-### Почему три таблицы, а не одна или две
+---
 
-**Плохой вариант — теги строкой в `manuals`:**
+## Формат ответов
 
-```sql
--- антипаттерн
-tags = 'go,backend,tutorial'
-```
-
-- нарушение 1NF (несколько значений в одном поле);
-- сложно искать материалы по тегу;
-- дублирование и опечатки (`Go` vs `go`).
-
-**Две таблицы без связующей — тоже не работает:** связь «один материал — много тегов, один тег — у многих материалов» — это **M:N (many-to-many)**. В реляционной модели её нельзя выразить одним внешним ключом между двумя сущностями.
-
-**Три таблицы — нормализованная схема:**
-
-- `manuals` и `tags` хранят сущности независимо (3NF);
-- `manual_tags` — junction-таблица для M:N;
-- `tags.name UNIQUE` — каждый тег хранится один раз;
-- `ON DELETE CASCADE` — при удалении материала или тега связи удаляются автоматически.
-
-### Миграции
-
-Применить по порядку:
-
-```bash
-psql -U postgres -d myapp -f storage/migrations/001_create_manuals.sql
-psql -U postgres -d myapp -f storage/migrations/002_create_tags.sql
-psql -U postgres -d myapp -f storage/migrations/003_create_manual_tags.sql
-```
-
-| Файл | Что создаёт |
-|---|---|
-| `001_create_manuals.sql` | `manuals` — PK `id` (UUID), NOT NULL, DEFAULT для `views_count` и `created_at` |
-| `002_create_tags.sql` | `tags` — PK `id` (SERIAL), UNIQUE на `name` |
-| `003_create_manual_tags.sql` | `manual_tags` — FK с CASCADE, составной PK `(manual_id, tag_id)` |
-
-### Тестовые данные (вручную)
-
-После миграций:
-
-```bash
-psql -U postgres -d myapp -f storage/seeds/001_sample_data.sql
-```
-
-Seed добавляет 5 тегов, 4 методички и связи M:N (например, «Введение в Go» → go, tutorial, backend; тег `backend` — у трёх материалов).
-
-Проверка:
-
-```sql
-SELECT m.title, array_agg(t.name ORDER BY t.name) AS tags
-FROM manuals m
-JOIN manual_tags mt ON mt.manual_id = m.id
-JOIN tags t ON t.id = mt.tag_id
-GROUP BY m.id, m.title;
-```
-
-## Запуск
-
-1. Создайте БД PostgreSQL и примените миграции из `storage/migrations/`.
-2. Скопируйте `.env` и укажите параметры подключения к БД (`DB_USER`, `DB_PASSWORD`, `DB_NAME` и др.).
-3. Запустите сервер:
-
-```bash
-go run ./cmd/app
-```
-
-## Healthcheck
-
-```bash
-curl http://localhost:8080/health
-```
-
-Ответ при успешном соединении с БД:
-
-```json
-{"status":"ok","database":"ok"}
-```
-
-При недоступной БД — HTTP 503:
-
-```json
-{"status":"error","database":"unavailable"}
-```
-
-## API: Manuals
-
-Единый формат ответов:
+**Успех:**
 
 ```json
 {"data": { ... }}
 ```
 
-Ошибки:
+**Ошибка:**
 
 ```json
 {"error": {"message": "..."}}
 ```
 
-Ошибка валидации (`400`):
+**Валидация (400):**
 
 ```json
 {
   "error": {
     "message": "validation failed",
     "fields": [
-      {"field": "title", "message": "is required"},
-      {"field": "author", "message": "is required"}
+      {"field": "title", "message": "is required"}
     ]
   }
 }
 ```
 
-### POST /manuals
+---
+
+## API
+
+### Сводная таблица
+
+| Метод | Путь | Auth | Описание |
+|---|---|---|---|
+| GET | `/health` | — | Проверка сервера и БД |
+| GET | `/tags` | — | Список тегов |
+| POST | `/tags` | — | Создать тег |
+| POST | `/manuals` | — | Создать материал |
+| GET | `/manuals` | — | Список с фильтрами |
+| GET | `/manuals/{id}` | — | Получить материал (+ теги, +1 просмотр) |
+| POST | `/manuals/{id}/tags` | — | Привязать теги |
+| GET | `/uploads/{filename}` | — | Скачать вложение |
+| PUT | `/manuals/{id}` | Admin | Обновить материал |
+| DELETE | `/manuals/{id}` | Admin | Удалить материал |
+| POST | `/manuals/{id}/attachment` | Admin | Загрузить файл |
+
+> **Admin** — заголовок `X-Admin-Token: <ADMIN_TOKEN>`
+
+---
+
+### Healthcheck
+
+```bash
+curl http://localhost:8080/health
+```
+
+---
+
+### Теги
+
+**Список тегов**
+
+```bash
+curl http://localhost:8080/tags
+```
+
+**Создать тег**
+
+```bash
+curl -X POST http://localhost:8080/tags \
+  -H "Content-Type: application/json" \
+  -d '{"name":"microservices"}'
+```
+
+Ответ `201`: `{"data":{"id":6,"name":"microservices"}}`  
+Дубликат имени → `409`
+
+---
+
+### Материалы
+
+**Создать**
 
 ```bash
 curl -X POST http://localhost:8080/manuals \
@@ -160,26 +246,159 @@ curl -X POST http://localhost:8080/manuals \
   -d '{"title":"Название","author":"Автор","content":"Текст методички"}'
 ```
 
-Ответ `201`:
+**Список с фильтрами**
+
+```bash
+# все (page=1, limit=20 по умолчанию)
+curl "http://localhost:8080/manuals"
+
+# фильтр по тегу + сортировка по популярности
+curl "http://localhost:8080/manuals?tag_id=1&sort=popular"
+
+# поиск по автору
+curl "http://localhost:8080/manuals?author=Иванов"
+
+# полнотекстовый поиск (title, content, author)
+curl "http://localhost:8080/manuals?q=PostgreSQL"
+
+# пагинация
+curl "http://localhost:8080/manuals?page=1&limit=2"
+```
+
+Ответ:
 
 ```json
 {
   "data": {
-    "id": "...",
-    "title": "Название",
-    "author": "Автор",
-    "content": "Текст методички",
-    "views_count": 0,
-    "created_at": "..."
+    "items": [ ... ],
+    "total": 4,
+    "page": 1,
+    "limit": 20
   }
 }
 ```
 
-### GET /manuals/{id}
+**Получить по ID** (асинхронно увеличивает `views_count`)
 
 ```bash
-curl http://localhost:8080/manuals/{id}
+curl http://localhost:8080/manuals/a1000000-0000-4000-8000-000000000001
 ```
 
-Ответ `200` — тот же формат с обёрткой `data`.  
-`404` — `{"error":{"message":"manual not found"}}`
+Ответ включает массив `tags`.
+
+**Привязать теги**
+
+```bash
+curl -X POST http://localhost:8080/manuals/{id}/tags \
+  -H "Content-Type: application/json" \
+  -d '{"tag_ids":[1,2,3]}'
+```
+
+---
+
+### Админ-операции
+
+Все запросы ниже требуют заголовок:
+
+```
+X-Admin-Token: dev-admin-secret
+```
+
+**Обновить материал**
+
+```bash
+curl -X PUT http://localhost:8080/manuals/{id} \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Token: dev-admin-secret" \
+  -d '{"title":"Новое название","author":"Автор","content":"Новый текст"}'
+```
+
+> Поле `file_path` опционально — если не передано, существующее вложение сохраняется.
+
+**Удалить материал**
+
+```bash
+curl -X DELETE http://localhost:8080/manuals/{id} \
+  -H "X-Admin-Token: dev-admin-secret"
+```
+
+Ответ: `204 No Content`. Связи в `manual_tags` удаляются каскадом, файл — с диска.
+
+**Загрузить вложение** (multipart, поле `file`, до 10 MB)
+
+```bash
+curl -X POST http://localhost:8080/manuals/{id}/attachment \
+  -H "X-Admin-Token: dev-admin-secret" \
+  -F "file=@document.pdf"
+```
+
+**Скачать вложение**
+
+```bash
+curl http://localhost:8080/uploads/{filename}
+```
+
+---
+
+## Postman
+
+1. Создайте Environment с переменными:
+   - `base_url` = `http://localhost:8080`
+   - `admin_token` = `dev-admin-secret`
+   - `manual_id` = UUID материала из seed
+
+2. Для админ-запросов добавьте header:
+   - Key: `X-Admin-Token`
+   - Value: `{{admin_token}}`
+
+3. Для загрузки файла: Body → form-data → key `file` (тип File).
+
+---
+
+## Сценарий демонстрации (~5 мин)
+
+Рекомендуемый порядок для защиты/презентации:
+
+```
+1. GET  /health                          → сервер и БД работают
+2. GET  /manuals?tag_id=1&sort=popular   → список + фильтр + сортировка
+3. GET  /manuals/{seed-id}               → детали с тегами
+4. GET  /manuals/{seed-id}  (повторно)   → views_count вырос (worker)
+5. POST /tags                            → создать новый тег
+6. POST /manuals                         → создать материал
+7. POST /manuals/{id}/tags               → привязать теги
+8. PUT  /manuals/{id}  (+ Admin-Token)   → обновить
+9. POST /manuals/{id}/attachment         → загрузить PDF/txt
+10. GET /uploads/{filename}              → скачать файл
+11. DELETE /manuals/{id} (+ Admin-Token) → удалить (без токена → 401)
+```
+
+Seed ID для шага 3: `a1000000-0000-4000-8000-000000000001` («Введение в Go», теги: go, backend, tutorial).
+
+---
+
+## Архитектурные решения
+
+| Задача | Решение |
+|---|---|
+| M:N теги | Junction-таблица `manual_tags` |
+| Счётчик просмотров | Горутина-worker + канал, неблокирующая отправка из handler |
+| Динамические фильтры | SQL с плейсхолдерами `$1, $2...` без конкатенации значений |
+| Админ-доступ | Middleware `X-Admin-Token` на группе роутов |
+| Файлы | Локальный диск `storage/uploads/`, защита от path traversal |
+| Остановка сервера | `Shutdown` → отмена context worker → drain канала |
+
+---
+
+## Разработка
+
+```bash
+# сборка
+go build ./...
+
+# запуск
+go run ./cmd/app
+
+# smoke-тест (сервер должен быть запущен)
+powershell -File scripts/smoke_test.ps1
+```

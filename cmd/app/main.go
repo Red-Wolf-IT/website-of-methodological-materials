@@ -17,7 +17,9 @@ import (
 	"website-of-methodological-materials/internal/repository/postgres"
 	"website-of-methodological-materials/internal/server"
 	"website-of-methodological-materials/internal/service"
+	"website-of-methodological-materials/internal/storage"
 	"website-of-methodological-materials/internal/validator"
+	"website-of-methodological-materials/internal/worker"
 )
 
 func main() {
@@ -28,6 +30,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	if cfg.AdminToken == "" {
+		log.Fatal("ADMIN_TOKEN is required")
+	}
 
 	ctx := context.Background()
 
@@ -37,18 +42,42 @@ func main() {
 	}
 	defer pool.Close()
 
+	fileStorage, err := storage.NewFileStorage(cfg.StorageDir)
+	if err != nil {
+		log.Fatalf("storage: %v", err)
+	}
+
 	// собираем цепочку: repo → service → handler
 	healthRepo := postgres.NewHealthRepository(pool)
 	healthService := service.NewHealthService(healthRepo)
 	healthHandler := handlers.NewHealthHandler(healthService)
 
 	manualRepo := postgres.NewManualRepository(pool)
-	manualService := service.NewManualService(manualRepo)
-	manualHandler := handlers.NewManualHandler(manualService, validator.New())
+	manualService := service.NewManualService(manualRepo, fileStorage)
+
+	viewsWorker := worker.NewViewsWorker(manualRepo, 100)
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
+
+	go viewsWorker.Run(workerCtx)
+
+	v := validator.New()
+	manualHandler := handlers.NewManualHandler(manualService, v, viewsWorker.ViewsChan())
+
+	tagRepo := postgres.NewTagRepository(pool)
+	tagService := service.NewTagService(tagRepo)
+	tagHandler := handlers.NewTagHandler(tagService, v)
+	fileHandler := handlers.NewFileHandler(manualService)
 
 	httpServer := &http.Server{
-		Addr:    cfg.ServerAddr,
-		Handler: server.New(healthHandler, manualHandler),
+		Addr: cfg.ServerAddr,
+		Handler: server.New(
+			server.Config{AdminToken: cfg.AdminToken},
+			healthHandler,
+			manualHandler,
+			tagHandler,
+			fileHandler,
+		),
 	}
 
 	go func() {
@@ -69,6 +98,9 @@ func main() {
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("shutdown: %v", err)
 	}
+
+	workerCancel()
+	viewsWorker.Wait()
 
 	log.Println("server stopped")
 }

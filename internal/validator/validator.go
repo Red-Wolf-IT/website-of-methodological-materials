@@ -60,6 +60,8 @@ func formatTag(fe playground.FieldError) string {
 		return fmt.Sprintf("must be at most %s characters", fe.Param())
 	case "min":
 		return fmt.Sprintf("must be at least %s characters", fe.Param())
+	case "gt":
+		return fmt.Sprintf("must be greater than %s", fe.Param())
 	default:
 		return "is invalid"
 	}

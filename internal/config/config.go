@@ -8,6 +8,8 @@ import (
 type Config struct {
 	ServerAddr  string
 	DatabaseDSN string
+	AdminToken  string
+	StorageDir  string
 }
 
 func Load() (*Config, error) {
@@ -30,6 +32,8 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		ServerAddr: getEnv("SERVER_ADDR", ":8080"),
+		AdminToken: os.Getenv("ADMIN_TOKEN"),
+		StorageDir: getEnv("STORAGE_DIR", "storage/uploads"),
 		// pgx понимает и URL, и key=value формат
 		DatabaseDSN: fmt.Sprintf(
 			"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",

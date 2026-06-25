@@ -15,6 +15,7 @@ type Manual struct {
 	ViewsCount int        `json:"views_count"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
+	Tags       []Tag      `json:"tags,omitempty"`
 }
 
 type ManualCreate struct {
@@ -24,7 +25,21 @@ type ManualCreate struct {
 	FilePath *string
 }
 
-// CreateManualRequest — тело POST /manuals
+// UpdateManualRequest — тело PUT /manuals/{id}
+type UpdateManualRequest struct {
+	Title    string  `json:"title" validate:"required,max=255"`
+	Author   string  `json:"author" validate:"required,max=255"`
+	Content  string  `json:"content" validate:"required"`
+	FilePath *string `json:"file_path,omitempty" validate:"omitempty,max=512"`
+}
+
+type ManualUpdate struct {
+	Title    string
+	Author   string
+	Content  string
+	FilePath *string
+}
+
 type CreateManualRequest struct {
 	Title    string  `json:"title" validate:"required,max=255"`
 	Author   string  `json:"author" validate:"required,max=255"`
