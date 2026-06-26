@@ -1,0 +1,121 @@
+{
+  "info": {
+    "name": "Methodological Materials API",
+    "description": "Импорт в Postman: File → Import → выберите этот файл.\nСоздайте Environment с переменными base_url и admin_token.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8080" },
+    { "key": "admin_token", "value": "dev-admin-secret" },
+    { "key": "manual_id", "value": "a1000000-0000-4000-8000-000000000001" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/health"
+      }
+    },
+    {
+      "name": "Tags",
+      "item": [
+        {
+          "name": "List tags",
+          "request": { "method": "GET", "url": "{{base_url}}/tags" }
+        },
+        {
+          "name": "Create tag",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"postman-tag\"}" },
+            "url": "{{base_url}}/tags"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Manuals",
+      "item": [
+        {
+          "name": "List (with filters)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/manuals?tag_id=1&sort=popular&page=1&limit=10",
+              "host": ["{{base_url}}"],
+              "path": ["manuals"],
+              "query": [
+                { "key": "tag_id", "value": "1" },
+                { "key": "sort", "value": "popular" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get by ID",
+          "request": { "method": "GET", "url": "{{base_url}}/manuals/{{manual_id}}" }
+        },
+        {
+          "name": "Create",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\":\"Postman Manual\",\"author\":\"Author\",\"content\":\"Content from Postman\"}"
+            },
+            "url": "{{base_url}}/manuals"
+          }
+        },
+        {
+          "name": "Attach tags",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"tag_ids\":[1,2]}" },
+            "url": "{{base_url}}/manuals/{{manual_id}}/tags"
+          }
+        },
+        {
+          "name": "Update (admin)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Admin-Token", "value": "{{admin_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\":\"Updated\",\"author\":\"Author\",\"content\":\"Updated content\"}"
+            },
+            "url": "{{base_url}}/manuals/{{manual_id}}"
+          }
+        },
+        {
+          "name": "Upload attachment (admin)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "X-Admin-Token", "value": "{{admin_token}}" }],
+            "body": {
+              "mode": "formdata",
+              "formdata": [{ "key": "file", "type": "file", "src": "" }]
+            },
+            "url": "{{base_url}}/manuals/{{manual_id}}/attachment"
+          }
+        },
+        {
+          "name": "Delete (admin)",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "X-Admin-Token", "value": "{{admin_token}}" }],
+            "url": "{{base_url}}/manuals/{{manual_id}}"
+          }
+        }
+      ]
+    }
+  ]
+}
